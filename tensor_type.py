@@ -6,11 +6,11 @@ from typing import Tuple
 
 
 class TensorType:
-    
+
     def __init__(self, dtype, *dims):
         self.dtype: str = dtype
         self.dims: Tuple = dims
-    
+
     def __repr__(self):
         return f"{self.dtype}[{', '.join(str(d) for d in self.dims)}]"
 
@@ -45,4 +45,3 @@ if __name__ == "__main__":
     print(z)
     print(z.dtype)
     print(z.dims)
-

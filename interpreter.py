@@ -1,31 +1,26 @@
 # Reference: https://github.com/Deep-Learning-Profiling-Tools/triton-viz/commit/434fa2000a211c9958d570b6369df3b41d93a97a
 
 import inspect
-import triton.language as tl
+import traceback
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from functools import wraps
+from typing import Any, List, Optional, Tuple
+
 import numpy as np
-
-
+import numpy.typing as npt
+import triton.language as tl
+from triton.runtime import JITFunction
 from triton.runtime.interpreter import (
-    GridExecutor,
-    _implicit_cvt,
     RESERVED_KWS,
-    interpreter_builder,
+    GridExecutor,
     InterpretedFunction,
+    _implicit_cvt,
 )
 from triton.runtime.interpreter import _patch_lang as triton_patch_lang
-from triton.runtime import JITFunction
-from typing import Tuple, List, Optional
-from contextlib import contextmanager
-from functools import wraps
-
+from triton.runtime.interpreter import interpreter_builder
 
 ## Op
-
-from dataclasses import dataclass, field
-from typing import List, Tuple, Any
-import traceback
-import numpy.typing as npt
-import numpy as np
 
 
 @dataclass
@@ -128,6 +123,7 @@ class Launch:
 
 
 ## Interpreter
+
 
 def _patch_lang(fn):
     triton_patch_lang(fn)
@@ -483,6 +479,7 @@ def patch():
 
 ## Collect
 
+
 def collect_grid():
     for launch in record_builder.launches[-1:]:
         records, tensor_table, failures, access_offsets = collect_launch(launch)
@@ -510,6 +507,6 @@ def collect_launch(launch):
             access_offsets[last_grid.idx] = r.original_offsets
             if (r.invalid_access_masks & r.original_masks).any():
                 failures[last_grid.idx] = ~(r.invalid_access_masks & r.original_masks)
-            
+
     all_grids[last_grid.idx] = program_records
     return all_grids, tensor_table, failures, access_offsets
