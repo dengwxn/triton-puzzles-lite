@@ -104,11 +104,12 @@ tl.load use mask: i < 4 and j < 3.
 def demo2(x_ptr):
     i_range = tl.arange(0, 8)[:, None]
     j_range = tl.arange(0, 4)[None, :]
+    print(f"i_range: {i_range}")
+    print(f"j_range: {j_range}")
     range = i_range * 4 + j_range
-    # print works in the interpreter
-    print(range)
+    print(f"range: {range}")
     x = tl.load(x_ptr + range, (i_range < 4) & (j_range < 3), 0)
-    print(x)
+    print(f"x: {x}")
 
 
 def run_demo2():
@@ -204,7 +205,7 @@ Block size `B0` is always the same as vector `x` with length `N0`.
 """
 
 
-def add_spec(x: Float32[32,]) -> Float32[32,]:
+def add_spec(x: Float32[32,]) -> Float32[32,]:  # type: ignore
     "This is the spec that you should implement. Uses typing to define sizes."
     return x + 10.0
 
@@ -214,7 +215,8 @@ def add_kernel(x_ptr, z_ptr, N0, B0: tl.constexpr):
     # We name the offsets of the pointers as "off_"
     off_x = tl.arange(0, B0)
     x = tl.load(x_ptr + off_x)
-    # Finish me!
+    x = x + 10.0
+    tl.store(z_ptr + off_x, x)
     return
 
 
@@ -229,13 +231,17 @@ Block size `B0` is now smaller than the shape vector `x` which is `N0`.
 """
 
 
-def add2_spec(x: Float32[200,]) -> Float32[200,]:
+def add2_spec(x: Float32[200,]) -> Float32[200,]:  # type: ignore
     return x + 10.0
 
 
 @triton.jit
 def add_mask2_kernel(x_ptr, z_ptr, N0, B0: tl.constexpr):
-    # Finish me!
+    off_x = tl.program_id(0) * B0 + tl.arange(0, B0)
+    mask = off_x < N0
+    x = tl.load(x_ptr + off_x, mask)
+    x = x + 10.0
+    tl.store(z_ptr + off_x, x, mask)
     return
 
 
@@ -252,13 +258,19 @@ Block size `B1` is always the same as vector `y` length `N1`.
 """
 
 
-def add_vec_spec(x: Float32[32,], y: Float32[32,]) -> Float32[32, 32]:
+def add_vec_spec(x: Float32[32,], y: Float32[32,]) -> Float32[32, 32]:  # type: ignore
     return x[None, :] + y[:, None]
 
 
 @triton.jit
 def add_vec_kernel(x_ptr, y_ptr, z_ptr, N0, N1, B0: tl.constexpr, B1: tl.constexpr):
-    # Finish me!
+    off_x = tl.arange(0, B0)
+    off_y = tl.arange(0, B1)
+    off_z = off_y[:, None] * B0 + off_x[None, :]
+    x = tl.load(x_ptr + off_x)
+    y = tl.load(y_ptr + off_y)
+    z = y[:, None] + x[None, :]
+    tl.store(z_ptr + off_z, z)
     return
 
 
@@ -275,7 +287,7 @@ Block size `B1` is always less than vector `y` length `N1`.
 """
 
 
-def add_vec_block_spec(x: Float32[100,], y: Float32[90,]) -> Float32[90, 100]:
+def add_vec_block_spec(x: Float32[100,], y: Float32[90,]) -> Float32[90, 100]:  # type: ignore
     return x[None, :] + y[:, None]
 
 
@@ -285,7 +297,15 @@ def add_vec_block_kernel(
 ):
     block_id_x = tl.program_id(0)
     block_id_y = tl.program_id(1)
-    # Finish me!
+    off_x = block_id_x * B0 + tl.arange(0, B0)
+    off_y = block_id_y * B1 + tl.arange(0, B1)
+    off_z = off_y[:, None] * N0 + off_x[None, :]
+    x = tl.load(x_ptr + off_x, mask=off_x < N0)
+    y = tl.load(y_ptr + off_y, mask=off_y < N1)
+    z = y[:, None] + x[None, :]
+    # [NOTE] mask_z is a boolean tensor of shape (B1, B0).
+    mask_z = (off_y < N1)[:, None] & (off_x < N0)[None, :]
+    tl.store(z_ptr + off_z, z, mask=mask_z)
     return
 
 
@@ -302,7 +322,7 @@ Block size `B1` is always less than vector `y` length `N1`.
 """
 
 
-def mul_relu_block_spec(x: Float32[100,], y: Float32[90,]) -> Float32[90, 100]:
+def mul_relu_block_spec(x: Float32[100,], y: Float32[90,]) -> Float32[90, 100]:  # type: ignore
     return torch.relu(x[None, :] * y[:, None])
 
 
@@ -312,7 +332,15 @@ def mul_relu_block_kernel(
 ):
     block_id_x = tl.program_id(0)
     block_id_y = tl.program_id(1)
-    # Finish me!
+    off_x = block_id_x * B0 + tl.arange(0, B0)
+    off_y = block_id_y * B1 + tl.arange(0, B1)
+    off_z = off_y[:, None] * N0 + off_x[None, :]
+    x = tl.load(x_ptr + off_x, mask=off_x < N0)
+    y = tl.load(y_ptr + off_y, mask=off_y < N1)
+    z = y[:, None] * x[None, :]
+    relu_z = tl.where(z > 0, z, 0)
+    mask_z = (off_y < N1)[:, None] & (off_x < N0)[None, :]
+    tl.store(z_ptr + off_z, relu_z, mask=mask_z)
     return
 
 
@@ -334,8 +362,8 @@ is of shape `N1` by `N0`
 
 
 def mul_relu_block_back_spec(
-    x: Float32[90, 100], y: Float32[90,], dz: Float32[90, 100]
-) -> Float32[90, 100]:
+    x: Float32[90, 100], y: Float32[90,], dz: Float32[90, 100]  # type: ignore
+) -> Float32[90, 100]:  # type: ignore
     x = x.clone()
     y = y.clone()
     x = x.requires_grad_(True)
@@ -352,7 +380,30 @@ def mul_relu_block_back_kernel(
 ):
     block_id_i = tl.program_id(0)
     block_id_j = tl.program_id(1)
-    # Finish me!
+
+    off_i = block_id_i * B0 + tl.arange(0, B0)
+    off_j = block_id_j * B1 + tl.arange(0, B1)
+    off_z = off_j[:, None] * N0 + off_i[None, :]
+
+    mask_i = off_i < N0
+    mask_j = off_j < N1
+    mask_z = mask_j[:, None] & mask_i[None, :]
+
+    x = tl.load(x_ptr + off_z, mask=mask_z)
+    y = tl.load(y_ptr + off_j, mask=mask_j)
+    dz = tl.load(dz_ptr + off_z, mask=mask_z)
+
+    # [NOTE] Chain rule backward.
+    # dL/dx = dL/dz * dz/dx
+    # (dx) = (dz) * dz/dxy * dxy/dx
+    # dz/dxy = 1 if x * y > 0 else 0
+    # dxy/dx = y[:, None]
+
+    dz_dxy = tl.where(x * y[:, None] > 0, 1.0, 0.0)
+    dxy_dx = y[:, None]
+    dx = dz * dz_dxy * dxy_dx
+    tl.store(dx_ptr + off_z, dx, mask=mask_z)
+
     return
 
 
@@ -371,7 +422,7 @@ Hint: You will need a for loop for this problem. These work and look the same as
 """
 
 
-def sum_spec(x: Float32[4, 200]) -> Float32[4,]:
+def sum_spec(x: Float32[4, 200]) -> Float32[4,]:  # type: ignore
     return x.sum(1)
 
 
@@ -406,7 +457,7 @@ Hint: you will find this identity useful:
 """
 
 
-def softmax_spec(x: Float32[4, 200]) -> Float32[4, 200]:
+def softmax_spec(x: Float32[4, 200]) -> Float32[4, 200]:  # type: ignore
     x_max = x.max(1, keepdim=True)[0]
     x = x - x_max
     x_exp = x.exp()
@@ -450,8 +501,8 @@ Hint: Use `tl.where` to mask `q dot k` to -inf to avoid overflow (NaN).
 
 
 def flashatt_spec(
-    q: Float32[200,], k: Float32[200,], v: Float32[200,]
-) -> Float32[200,]:
+    q: Float32[200,], k: Float32[200,], v: Float32[200,]  # type: ignore
+) -> Float32[200,]:  # type: ignore
     x = q[:, None] * k[None, :]
     x_max = x.max(1, keepdim=True)[0]
     x = x - x_max
@@ -485,7 +536,7 @@ Image `x` is size is `H` by `W` with only 1 channel, and kernel `k` is size `KH`
 """
 
 
-def conv2d_spec(x: Float32[4, 8, 8], k: Float32[4, 4]) -> Float32[4, 8, 8]:
+def conv2d_spec(x: Float32[4, 8, 8], k: Float32[4, 4]) -> Float32[4, 8, 8]:  # type: ignore
     z = torch.zeros(4, 8, 8)
     x = torch.nn.functional.pad(x, (0, 4, 0, 4, 0, 0), value=0.0)
     # print(x.shape, k.shape)
@@ -525,7 +576,7 @@ Hint: the main trick is that you can split a matmul into smaller parts.
 """
 
 
-def dot_spec(x: Float32[4, 32, 32], y: Float32[4, 32, 32]) -> Float32[4, 32, 32]:
+def dot_spec(x: Float32[4, 32, 32], y: Float32[4, 32, 32]) -> Float32[4, 32, 32]:  # type: ignore
     return x @ y
 
 
@@ -577,11 +628,11 @@ GROUP = 8
 
 
 def quant_dot_spec(
-    scale: Float32[32, 8],
-    offset: Int32[32,],
-    weight: Int32[32, 8],
-    activation: Float32[64, 32],
-) -> Float32[32, 32]:
+    scale: Float32[32, 8],  # type: ignore
+    offset: Int32[32,],  # type: ignore
+    weight: Int32[32, 8],  # type: ignore
+    activation: Float32[64, 32],  # type: ignore
+) -> Float32[32, 32]:  # type: ignore
     offset = offset.view(32, 1)
 
     def extract(x):
