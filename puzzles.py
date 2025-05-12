@@ -297,15 +297,19 @@ def add_vec_block_kernel(
 ):
     block_id_x = tl.program_id(0)
     block_id_y = tl.program_id(1)
+
     off_x = block_id_x * B0 + tl.arange(0, B0)
     off_y = block_id_y * B1 + tl.arange(0, B1)
     off_z = off_y[:, None] * N0 + off_x[None, :]
-    x = tl.load(x_ptr + off_x, mask=off_x < N0)
-    y = tl.load(y_ptr + off_y, mask=off_y < N1)
+
+    mask_x = off_x < N0
+    mask_y = off_y < N1
+    mask_z = mask_y[:, None] & mask_x[None, :]
+
+    x = tl.load(x_ptr + off_x, mask_x)
+    y = tl.load(y_ptr + off_y, mask_y)
     z = y[:, None] + x[None, :]
-    # [NOTE] mask_z is a boolean tensor of shape (B1, B0).
-    mask_z = (off_y < N1)[:, None] & (off_x < N0)[None, :]
-    tl.store(z_ptr + off_z, z, mask=mask_z)
+    tl.store(z_ptr + off_z, z, mask_z)
     return
 
 
@@ -332,15 +336,20 @@ def mul_relu_block_kernel(
 ):
     block_id_x = tl.program_id(0)
     block_id_y = tl.program_id(1)
+
     off_x = block_id_x * B0 + tl.arange(0, B0)
     off_y = block_id_y * B1 + tl.arange(0, B1)
     off_z = off_y[:, None] * N0 + off_x[None, :]
-    x = tl.load(x_ptr + off_x, mask=off_x < N0)
-    y = tl.load(y_ptr + off_y, mask=off_y < N1)
+
+    mask_x = off_x < N0
+    mask_y = off_y < N1
+    mask_z = mask_y[:, None] & mask_x[None, :]
+
+    x = tl.load(x_ptr + off_x, mask_x)
+    y = tl.load(y_ptr + off_y, mask_y)
     z = y[:, None] * x[None, :]
     relu_z = tl.where(z > 0, z, 0)
-    mask_z = (off_y < N1)[:, None] & (off_x < N0)[None, :]
-    tl.store(z_ptr + off_z, relu_z, mask=mask_z)
+    tl.store(z_ptr + off_z, relu_z, mask_z)
     return
 
 
@@ -428,7 +437,22 @@ def sum_spec(x: Float32[4, 200]) -> Float32[4,]:  # type: ignore
 
 @triton.jit
 def sum_kernel(x_ptr, z_ptr, N0, N1, T, B0: tl.constexpr, B1: tl.constexpr):
-    # Finish me!
+    block_id_i = tl.program_id(0)
+    off_i = block_id_i * B0 + tl.arange(0, B0)
+    mask_i = off_i < N0
+
+    z = tl.zeros([B0], dtype=tl.float32)
+
+    for j in range(0, T, B1):
+        off_j = j + tl.arange(0, B1)
+        mask_j = off_j < T
+        off_ij = off_i[:, None] * T + off_j[None, :]
+        mask_ij = mask_i[:, None] & mask_j[None, :]
+
+        x = tl.load(x_ptr + off_ij, mask_ij)
+        z += tl.sum(x, axis=1)
+
+    tl.store(z_ptr + off_i, z, mask_i)
     return
 
 
@@ -449,7 +473,7 @@ they recommend not using `exp` but instead using `exp2`. You need the identity
 .. math::
     \exp(x) = 2^{\log_2(e) x}
 
-Advanced: there one way to do this with 3 loops. You can also do it with 2 loops if you are clever.
+Advanced: there is one way to do this with 3 loops. You can also do it with 2 loops if you are clever.
 Hint: you will find this identity useful:
 
 .. math::
@@ -469,7 +493,35 @@ def softmax_kernel(x_ptr, z_ptr, N0, N1, T, B0: tl.constexpr, B1: tl.constexpr):
     """2 loops ver."""
     block_id_i = tl.program_id(0)
     log2_e = 1.44269504
-    # Finish me!
+
+    off_i = block_id_i * B0 + tl.arange(0, B0)
+    mask_i = off_i < N0
+
+    max_x = tl.full([B0], -float("inf"), dtype=tl.float32)
+    max_x_upd = tl.full([B0], -float("inf"), dtype=tl.float32)
+    sum_e = tl.zeros([B0], dtype=tl.float32)
+
+    for j in range(0, T, B1):
+        off_j = j + tl.arange(0, B1)
+        mask_j = off_j < T
+        off_ij = off_i[:, None] * T + off_j[None, :]
+        mask_ij = mask_i[:, None] & mask_j[None, :]
+        x = tl.load(x_ptr + off_ij, mask_ij)
+
+        max_x_upd = tl.maximum(max_x, tl.max(x, axis=1))
+        e_upd = tl.sum(tl.exp2(log2_e * (x - max_x_upd[:, None])), axis=1)
+        sum_e = sum_e * tl.exp2(log2_e * (max_x - max_x_upd)) + e_upd
+        max_x = max_x_upd
+
+    for j in range(0, T, B1):
+        off_j = j + tl.arange(0, B1)
+        mask_j = off_j < T
+        off_ij = off_i[:, None] * T + off_j[None, :]
+        mask_ij = mask_i[:, None] & mask_j[None, :]
+        x = tl.load(x_ptr + off_ij, mask_ij)
+        e = tl.exp2(log2_e * (x - max_x_upd[:, None]))
+        z = e / sum_e
+        tl.store(z_ptr + off_ij, z, mask_ij)
     return
 
 
