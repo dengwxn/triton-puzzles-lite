@@ -519,7 +519,7 @@ def softmax_kernel(x_ptr, z_ptr, N0, N1, T, B0: tl.constexpr, B1: tl.constexpr):
         off_ij = off_i[:, None] * T + off_j[None, :]
         mask_ij = mask_i[:, None] & mask_j[None, :]
         x = tl.load(x_ptr + off_ij, mask_ij)
-        e = tl.exp2(log2_e * (x - max_x_upd[:, None]))
+        e = tl.exp2(log2_e * (x - max_x[:, None]))
         z = e / sum_e
         tl.store(z_ptr + off_ij, z, mask_ij)
     return
