@@ -499,18 +499,21 @@ def softmax_kernel(x_ptr, z_ptr, N0, N1, T, B0: tl.constexpr, B1: tl.constexpr):
 
     max_x = tl.full([B0], -float("inf"), dtype=tl.float32)
     max_x_upd = tl.full([B0], -float("inf"), dtype=tl.float32)
-    sum_e = tl.zeros([B0], dtype=tl.float32)
+    sum_exp = tl.zeros([B0], dtype=tl.float32)
 
     for j in range(0, T, B1):
         off_j = j + tl.arange(0, B1)
         mask_j = off_j < T
         off_ij = off_i[:, None] * T + off_j[None, :]
         mask_ij = mask_i[:, None] & mask_j[None, :]
-        x = tl.load(x_ptr + off_ij, mask_ij)
 
+        x = tl.load(x_ptr + off_ij, mask_ij)
         max_x_upd = tl.maximum(max_x, tl.max(x, axis=1))
-        e_upd = tl.sum(tl.exp2(log2_e * (x - max_x_upd[:, None])), axis=1)
-        sum_e = sum_e * tl.exp2(log2_e * (max_x - max_x_upd)) + e_upd
+        exp = tl.exp2(log2_e * (x - max_x_upd[:, None]))
+
+        alpha = tl.exp2(log2_e * (max_x - max_x_upd))
+        sum_exp = sum_exp * alpha + tl.sum(exp, axis=1)
+
         max_x = max_x_upd
 
     for j in range(0, T, B1):
@@ -518,10 +521,13 @@ def softmax_kernel(x_ptr, z_ptr, N0, N1, T, B0: tl.constexpr, B1: tl.constexpr):
         mask_j = off_j < T
         off_ij = off_i[:, None] * T + off_j[None, :]
         mask_ij = mask_i[:, None] & mask_j[None, :]
+
         x = tl.load(x_ptr + off_ij, mask_ij)
-        e = tl.exp2(log2_e * (x - max_x[:, None]))
-        z = e / sum_e
+        exp = tl.exp2(log2_e * (x - max_x[:, None]))
+
+        z = exp / sum_exp
         tl.store(z_ptr + off_ij, z, mask_ij)
+
     return
 
 
@@ -560,7 +566,7 @@ def flashatt_spec(
     x = x - x_max
     x_exp = x.exp()
     soft = x_exp / x_exp.sum(1, keepdim=True)
-    return (v[None, :] * soft).sum(1)
+    return (soft * v[None, :]).sum(1)
 
 
 @triton.jit
@@ -569,8 +575,35 @@ def flashatt_kernel(
 ):
     block_id_i = tl.program_id(0)
     log2_e = 1.44269504
-    myexp = lambda x: tl.exp2(log2_e * x)
-    # Finish me!
+
+    off_i = block_id_i * B0 + tl.arange(0, B0)
+    mask_i = off_i < N0
+    q = tl.load(q_ptr + off_i, mask_i)
+
+    max_qk = tl.full([B0], -1e6, dtype=tl.float32)
+    sum_exp = tl.zeros([B0], dtype=tl.float32)
+    z = tl.zeros([B0], dtype=tl.float32)
+
+    for j in range(0, T, B1):
+        off_j = j + tl.arange(0, B1)
+        mask_j = off_j < T
+        mask_ij = mask_i[:, None] & mask_j[None, :]
+
+        k = tl.load(k_ptr + off_j, mask_j)
+        v = tl.load(v_ptr + off_j, mask_j)
+
+        qk = q[:, None] * k[None, :] + tl.where(mask_ij, 0.0, -1e6)
+        max_qk_upd = tl.maximum(max_qk, tl.max(qk, axis=1))
+        exp_qk = tl.exp2(log2_e * (qk - max_qk_upd[:, None]))
+
+        alpha = tl.exp2(log2_e * (max_qk - max_qk_upd))
+        sum_exp = sum_exp * alpha + tl.sum(exp_qk, axis=1)
+        z = z * alpha + tl.sum(exp_qk * v[None, :], axis=1)
+
+        max_qk = max_qk_upd
+
+    z = z / sum_exp
+    tl.store(z_ptr + off_i, z, mask_i)
     return
 
 

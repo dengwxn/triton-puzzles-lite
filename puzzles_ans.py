@@ -607,7 +607,7 @@ def flashatt_spec(
     x = x - x_max
     x_exp = x.exp()
     soft = x_exp / x_exp.sum(1, keepdim=True)
-    return (v[None, :] * soft).sum(1)
+    return (soft * v[None, :]).sum(1)
 
 
 @triton.jit
@@ -616,14 +616,10 @@ def flashatt_kernel(
 ):
     block_id_i = tl.program_id(0)
     log2_e = 1.44269504
-    # myexp = lambda x: tl.exp2(log2_e * x)
     # Finish me!
 
     off_i = block_id_i * B0 + tl.arange(0, B0)
     mask_i = off_i < N0
-    inf = 1.0e6
-
-    # Need `other`!!!
     q = tl.load(q_ptr + off_i, mask=mask_i)
 
     # The variable names of Triton's offcial FlashAttention tutorial
@@ -633,7 +629,7 @@ def flashatt_kernel(
     # l_i
     exp_sum = tl.zeros((B0,), dtype=tl.float32)
     # m_i
-    qk_max = tl.full((B0,), -inf, dtype=tl.float32)
+    qk_max = tl.full((B0,), -1e6, dtype=tl.float32)
     z = tl.zeros((B0,), dtype=tl.float32)
 
     for id_j in tl.range(0, T, B1):
@@ -642,8 +638,7 @@ def flashatt_kernel(
         mask_ij = mask_i[:, None] & mask_j[None, :]
 
         k = tl.load(k_ptr + off_j, mask=mask_j)
-        qk = q[:, None] * k[None, :] + tl.where(mask_ij, 0, -1.0e6)
-        # print(qk.shape)
+        qk = q[:, None] * k[None, :] + tl.where(mask_ij, 0.0, -1e6)
 
         # m_ij
         new_max = tl.maximum(tl.max(qk, axis=1), qk_max)
