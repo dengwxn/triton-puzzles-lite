@@ -755,13 +755,13 @@ def dot_kernel(
     block_id_k = tl.program_id(1)
     block_id_i = tl.program_id(2)
     # Finish me!
-    off_i = block_id_i * B2 + tl.arange(0, B2)
     off_j = block_id_j * B0 + tl.arange(0, B0)
     off_k = block_id_k * B1 + tl.arange(0, B1)
+    off_i = block_id_i * B2 + tl.arange(0, B2)
 
-    mask_i = off_i < N2
     mask_j = off_j < N0
     mask_k = off_k < N1
+    mask_i = off_i < N2
 
     z = tl.zeros((B2, B0, B1), dtype=tl.float32)
     off_z = (
