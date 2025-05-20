@@ -398,9 +398,9 @@ def mul_relu_block_back_kernel(
     mask_j = off_j < N1
     mask_z = mask_j[:, None] & mask_i[None, :]
 
-    x = tl.load(x_ptr + off_z, mask=mask_z)
-    y = tl.load(y_ptr + off_j, mask=mask_j)
-    dz = tl.load(dz_ptr + off_z, mask=mask_z)
+    x = tl.load(x_ptr + off_z, mask_z)
+    y = tl.load(y_ptr + off_j, mask_j)
+    dz = tl.load(dz_ptr + off_z, mask_z)
 
     # [NOTE] Chain rule backward.
     # dL/dx = dL/dz * dz/dx
@@ -411,7 +411,7 @@ def mul_relu_block_back_kernel(
     dz_dxy = tl.where(x * y[:, None] > 0, 1.0, 0.0)
     dxy_dx = y[:, None]
     dx = dz * dz_dxy * dxy_dx
-    tl.store(dx_ptr + off_z, dx, mask=mask_z)
+    tl.store(dx_ptr + off_z, dx, mask_z)
 
     return
 
